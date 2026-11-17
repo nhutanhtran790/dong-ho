@@ -1,0 +1,618 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Chỉ đường đồng hồ</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #202124; --ink2: #5f6368; --line: #dadce0;
+    --green: #0f7b4b; --blue: #1a73e8; --red: #d93025;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { display: flex; flex-direction: column; }
+  header { padding: 10px 14px calc(10px + env(safe-area-inset-top)) 14px; padding-top: calc(10px + env(safe-area-inset-top));
+    background: var(--green); color: #fff; display: flex; align-items: center; gap: 10px; }
+  header h1 { font-size: 17px; margin: 0; flex: 1; font-weight: 600; }
+  .pill { font-size: 13px; padding: 4px 10px; border-radius: 99px; background: rgba(255,255,255,.18); white-space: nowrap; }
+  .pill.ok { background: #fff; color: var(--green); font-weight: 600; }
+  #map { flex: 1; min-height: 200px; }
+  .panel { background: var(--card); border-top: 1px solid var(--line); padding: 12px 14px calc(12px + env(safe-area-inset-bottom)); }
+  .row { display: flex; gap: 8px; align-items: center; }
+  input[type=text] { flex: 1; font-size: 16px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+  button { font-size: 15px; padding: 11px 14px; border-radius: 10px; border: 0; background: var(--blue); color: #fff; font-weight: 600; }
+  button.sec { background: #e8eaed; color: var(--ink); }
+  button.stop { background: var(--red); }
+  button:disabled { opacity: .45; }
+  #results { list-style: none; margin: 8px 0 0; padding: 0; max-height: 34vh; overflow: auto; }
+  #results li { padding: 9px 4px; border-bottom: 1px solid var(--line); font-size: 14px; }
+  #results li b { display: block; font-size: 15px; }
+  .big { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
+  .arrow { width: 54px; height: 54px; border-radius: 12px; background: var(--green); color: #fff; display: grid; place-items: center; font-size: 30px; font-weight: 700; flex: none; }
+  .dist { font-size: 26px; font-weight: 700; }
+  .street { color: var(--ink2); font-size: 15px; }
+  .meta { display: flex; justify-content: space-between; color: var(--ink2); font-size: 14px; margin-top: 4px; }
+  .meta b { color: #188038; font-size: 17px; }
+  .muted { color: var(--ink2); font-size: 13px; margin-top: 8px; }
+  label.chk { display: flex; gap: 6px; align-items: center; font-size: 14px; color: var(--ink2); margin-top: 8px; }
+  #log { font: 12px/1.35 ui-monospace, Menlo, monospace; color: var(--ink2); max-height: 72px; overflow: auto; margin-top: 6px; white-space: pre-wrap; }
+  .hide { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Chỉ đường đồng hồ</h1>
+  <span id="gpsPill" class="pill">GPS: chưa có</span>
+  <span id="blePill" class="pill">Đồng hồ: chưa nối</span>
+</header>
+<div id="map"></div>
+
+<div class="panel" id="planPanel">
+  <div class="row">
+    <button id="btnBle" class="sec">Kết nối đồng hồ</button>
+    <span class="muted" style="margin:0">Chọn điểm đến: tìm tên, hoặc chạm giữ trên bản đồ</span>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <input id="q" type="text" placeholder="Bạn muốn đi đâu?" enterkeyhint="search" autocomplete="off">
+    <button id="btnSearch">Tìm</button>
+  </div>
+  <ul id="results"></ul>
+  <div id="destBox" class="hide" style="margin-top:10px">
+    <div class="street" id="destName"></div>
+    <div class="row" style="margin-top:8px">
+      <button id="btnGo" style="flex:1">Bắt đầu dẫn đường</button>
+    </div>
+    <label class="chk"><input type="checkbox" id="chkSim"> Chạy thử (xe giả chạy trên tuyến, để test ở nhà)</label>
+  </div>
+  <div id="log"></div>
+</div>
+
+<div class="panel hide" id="navPanel">
+  <div class="big">
+    <div class="arrow" id="navArrow">↑</div>
+    <div style="min-width:0">
+      <div class="dist" id="navDist">--</div>
+      <div class="street" id="navStreet"></div>
+    </div>
+  </div>
+  <div class="meta"><span>Còn <span id="navRemain">--</span></span><b id="navEta">--</b><span id="navMapInfo"></span></div>
+  <div class="row" style="margin-top:10px">
+    <button id="btnStop" class="stop" style="flex:1">Dừng dẫn đường</button>
+  </div>
+  <div class="muted">Giữ app này mở và màn hình điện thoại luôn sáng khi chạy (Cài đặt → Màn hình → Tự động khóa → Không bao giờ).</div>
+  <div id="log2" class="muted"></div>
+</div>
+
+<script>
+"use strict";
+// ================== Cấu hình ==================
+const NUS    = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+const NUS_RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+const OSRM = "https://router.project-osrm.org/route/v1/driving/";
+const NOMINATIM = "https://nominatim.openstreetmap.org/search";
+const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
+const MAP_MAXP = 2300, MAP_MAXL = 480;   // nhỏ hơn giới hạn trong bando.h một chút
+const RT_MAXP = 1450;
+const WIN_HALF = 650;          // gửi đường trong ô vuông ±650 m quanh xe
+const WIN_EVERY_MS = 10000, WIN_MOVE_M = 150;
+const OFF_ROUTE_M = 45;
+const SIM_KMH = 35;
+
+// ================== Tiện ích ==================
+const $ = id => document.getElementById(id);
+function log(msg) {
+  const el = $("log"), el2 = $("log2");
+  const line = new Date().toLocaleTimeString("vi-VN") + "  " + msg;
+  el.textContent = (line + "\n" + el.textContent).slice(0, 2000);
+  el2.textContent = line;
+  console.log(msg);
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function fmtDist(m) {
+  if (m >= 1000) return (m / 1000).toFixed(1) + " km";
+  if (m >= 100) return Math.round(m / 10) * 10 + " m";
+  return Math.max(0, Math.round(m / 5) * 5) + " m";
+}
+
+// ================== Bản đồ trên điện thoại ==================
+const map = L.map("map", { zoomControl: false }).setView([10.7769, 106.7009], 14);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19, attribution: "© OpenStreetMap"
+}).addTo(map);
+let meMarker = null, destMarker = null, routeLine = null, followMe = true;
+map.on("dragstart", () => { followMe = false; });
+
+// ================== BLE ==================
+let bleDev = null, rxChar = null, bleChain = Promise.resolve(), bleQueued = 0;
+function setBlePill() {
+  const ok = !!rxChar;
+  $("blePill").textContent = ok ? "Đồng hồ: đã nối" : "Đồng hồ: chưa nối";
+  $("blePill").classList.toggle("ok", ok);
+  $("btnBle").textContent = ok ? "Đã kết nối" : "Kết nối đồng hồ";
+}
+async function bleConnect() {
+  if (!navigator.bluetooth) {
+    alert("Trình duyệt này không có Bluetooth web. Trên iPhone hãy mở trang này bằng app Bluefy.");
+    return;
+  }
+  try {
+    bleDev = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [NUS] }, { namePrefix: "DongHo" }], optionalServices: [NUS]
+    });
+    bleDev.addEventListener("gattserverdisconnected", onBleLost);
+    await bleAttach();
+  } catch (e) { log("Không kết nối được: " + e.message); }
+}
+async function bleAttach() {
+  const srv = await bleDev.gatt.connect();
+  const svc = await srv.getPrimaryService(NUS);
+  rxChar = await svc.getCharacteristic(NUS_RX);
+  setBlePill();
+  log("Đã kết nối đồng hồ");
+  if (nav.active) { nav.needRouteSend = true; nav.lastWinAt = 0; }
+}
+async function onBleLost() {
+  rxChar = null; setBlePill();
+  log("Mất kết nối đồng hồ, đang nối lại...");
+  for (let i = 0; i < 20 && bleDev && !rxChar; i++) {
+    await sleep(2000);
+    try { await bleAttach(); } catch (e) {}
+  }
+}
+// Gửi tuần tự từng gói, chờ gói trước xong mới gửi gói sau
+function bleSend(bytes) {
+  if (!rxChar) return Promise.resolve();
+  bleQueued++;
+  bleChain = bleChain.then(async () => {
+    if (!rxChar) return;
+    try {
+      if (rxChar.writeValueWithResponse) await rxChar.writeValueWithResponse(bytes);
+      else await rxChar.writeValue(bytes);
+    } catch (e) { log("Lỗi gửi BLE: " + e.message); }
+  }).finally(() => { bleQueued--; });
+  return bleChain;
+}
+const enc = new TextEncoder();
+function bleText(s) {
+  let b = enc.encode(s);
+  while (b.length > 180) { s = s.slice(0, -1); b = enc.encode(s); }
+  return bleSend(b);
+}
+
+// ================== Tọa độ phẳng (mét) quanh điểm gốc ==================
+let ref = null;   // {lat, lon, cos, unit}
+function makeRef(lat, lon) { return { lat, lon, cos: Math.cos(lat * Math.PI / 180), unit: 1 }; }
+function toXY(lat, lon) {
+  return [(lon - ref.lon) * 111320 * ref.cos, (lat - ref.lat) * 110540];
+}
+function i16(v) { return Math.max(-32768, Math.min(32767, Math.round(v))); }
+
+// Rút gọn đường gấp khúc (Ramer–Douglas–Peucker)
+function simplify(pts, tol) {
+  if (pts.length < 3) return pts.slice();
+  const keep = new Uint8Array(pts.length); keep[0] = keep[pts.length - 1] = 1;
+  const stack = [[0, pts.length - 1]], t2 = tol * tol;
+  while (stack.length) {
+    const [a, b] = stack.pop();
+    const [ax, ay] = pts[a], [bx, by] = pts[b];
+    const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy || 1e-9;
+    let best = -1, bi = -1;
+    for (let i = a + 1; i < b; i++) {
+      const [px, py] = pts[i];
+      let t = ((px - ax) * dx + (py - ay) * dy) / L2; t = Math.max(0, Math.min(1, t));
+      const ex = ax + t * dx - px, ey = ay + t * dy - py, d2 = ex * ex + ey * ey;
+      if (d2 > best) { best = d2; bi = i; }
+    }
+    if (best > t2) { keep[bi] = 1; stack.push([a, bi], [bi, b]); }
+  }
+  return pts.filter((_, i) => keep[i]);
+}
+
+// ================== Vị trí điện thoại ==================
+let me = null;   // {lat, lon, acc, spd (km/h), hdg}
+let prevMe = null;
+function onPos(p) {
+  const c = p.coords;
+  const m = { lat: c.latitude, lon: c.longitude, acc: c.accuracy || 50, t: p.timestamp,
+              spd: c.speed != null && c.speed >= 0 ? c.speed * 3.6 : null,
+              hdg: c.heading != null && !isNaN(c.heading) ? c.heading : null };
+  if (prevMe && (m.spd == null || m.hdg == null)) {
+    const dt = (m.t - prevMe.t) / 1000;
+    const dx = (m.lon - prevMe.lon) * 111320 * Math.cos(m.lat * Math.PI / 180), dy = (m.lat - prevMe.lat) * 110540;
+    const d = Math.hypot(dx, dy);
+    if (m.spd == null && dt > 0.3) m.spd = d / dt * 3.6;
+    if (m.hdg == null && d > 3) m.hdg = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
+  }
+  if (m.hdg == null && prevMe) m.hdg = prevMe.hdg;
+  prevMe = m;
+  if (!nav.sim) { me = m; onMove(); }
+  $("gpsPill").textContent = "GPS: ±" + Math.round(m.acc) + " m";
+  $("gpsPill").classList.toggle("ok", m.acc < 30);
+}
+if (navigator.geolocation) {
+  navigator.geolocation.watchPosition(onPos, e => log("GPS điện thoại: " + e.message),
+    { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+} else log("Trình duyệt không có định vị");
+
+function showMe() {
+  if (!me) return;
+  const ll = [me.lat, me.lon];
+  if (!meMarker) meMarker = L.circleMarker(ll, { radius: 8, color: "#fff", weight: 3, fillColor: "#4285f4", fillOpacity: 1 }).addTo(map);
+  else meMarker.setLatLng(ll);
+  if (followMe) map.setView(ll, nav.active ? 17 : Math.max(map.getZoom(), 15), { animate: false });
+}
+
+// ================== Tìm điểm đến ==================
+let dest = null;   // {lat, lon, name}
+async function search() {
+  const q = $("q").value.trim();
+  if (!q) return;
+  const u = new URL(NOMINATIM);
+  u.searchParams.set("format", "jsonv2"); u.searchParams.set("q", q);
+  u.searchParams.set("countrycodes", "vn"); u.searchParams.set("limit", "7");
+  u.searchParams.set("accept-language", "vi");
+  if (me) u.searchParams.set("viewbox", [me.lon - 0.3, me.lat + 0.3, me.lon + 0.3, me.lat - 0.3].join(","));
+  $("results").innerHTML = "<li>Đang tìm...</li>";
+  try {
+    const r = await fetch(u); const js = await r.json();
+    $("results").innerHTML = "";
+    if (!js.length) { $("results").innerHTML = "<li>Không tìm thấy. Thử ghi rõ hơn, hoặc chạm giữ trên bản đồ.</li>"; return; }
+    for (const it of js) {
+      const li = document.createElement("li");
+      const parts = it.display_name.split(",");
+      li.innerHTML = "<b></b><span></span>";
+      li.querySelector("b").textContent = parts[0];
+      li.querySelector("span").textContent = parts.slice(1, 4).join(",");
+      li.onclick = () => setDest(+it.lat, +it.lon, parts[0]);
+      $("results").appendChild(li);
+    }
+  } catch (e) { $("results").innerHTML = "<li>Lỗi tìm kiếm: " + e.message + "</li>"; }
+}
+function setDest(lat, lon, name) {
+  dest = { lat, lon, name: name || "Điểm đến" };
+  if (!destMarker) destMarker = L.marker([lat, lon]).addTo(map); else destMarker.setLatLng([lat, lon]);
+  $("results").innerHTML = "";
+  $("destName").textContent = "Đến: " + dest.name;
+  $("destBox").classList.remove("hide");
+  followMe = false;
+  map.setView([lat, lon], 16);
+}
+map.on("contextmenu", e => setDest(e.latlng.lat, e.latlng.lng, "Điểm đã chọn"));
+
+// ================== Tuyến đường (OSRM) ==================
+const MOD = { "uturn": "U", "sharp left": "L", "left": "L", "slight left": "SL", "straight": "S",
+              "slight right": "SR", "right": "R", "sharp right": "R" };
+const DIR_TXT = { S: "Đi thẳng", L: "Rẽ trái", R: "Rẽ phải", SL: "Chếch trái", SR: "Chếch phải", U: "Quay đầu", A: "Đến nơi" };
+const DIR_ICON = { S: "↑", L: "↰", R: "↱", SL: "↖", SR: "↗", U: "↶", A: "⚑" };
+
+async function fetchRoute(from, to) {
+  const url = OSRM + from.lon + "," + from.lat + ";" + to.lon + "," + to.lat +
+              "?overview=full&geometries=geojson&steps=true";
+  const r = await fetch(url);
+  const js = await r.json();
+  if (js.code !== "Ok" || !js.routes || !js.routes.length) throw new Error("không tìm được đường (" + js.code + ")");
+  return js.routes[0];
+}
+
+// Chuẩn bị tuyến: điểm (mét), quãng đường cộng dồn, các điểm rẽ
+function buildRoute(rt) {
+  const pts = rt.geometry.coordinates.map(([lon, lat]) => toXY(lat, lon));
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  const steps = [];
+  let from = 0;
+  for (const st of rt.legs[0].steps) {
+    const type = st.maneuver.type;
+    if (type === "depart") continue;
+    const [mx, my] = toXY(st.maneuver.location[1], st.maneuver.location[0]);
+    let bi = from, bd = 1e18;
+    for (let i = from; i < pts.length; i++) {
+      const d = Math.hypot(pts[i][0] - mx, pts[i][1] - my);
+      if (d < bd) { bd = d; bi = i; }
+      if (bd < 2 && d > 200) break;
+    }
+    from = bi;
+    let dir = type === "arrive" ? "A" : (MOD[st.maneuver.modifier] || "S");
+    const name = (st.name || st.ref || "").trim();
+    steps.push({ at: cum[bi], x: pts[bi][0], y: pts[bi][1], dir, name, type });
+  }
+  return { pts, cum, steps, total: cum[cum.length - 1], dur: rt.duration, dist: rt.distance };
+}
+
+// ================== Đường xung quanh (Overpass, dữ liệu OpenStreetMap) ==================
+let feats = [];   // {cls, pts:[[x,y]], minx, miny, maxx, maxy}
+async function fetchFeatures(route) {
+  // lấy mẫu tuyến mỗi ~150 m để hỏi các đường trong phạm vi 300 m quanh tuyến
+  const smp = [];
+  let next = 0;
+  const step = Math.max(150, route.total / 180);
+  for (let i = 0; i < route.pts.length; i++) {
+    if (route.cum[i] >= next || i === route.pts.length - 1) {
+      const [x, y] = route.pts[i];
+      smp.push((ref.lat + y / 110540).toFixed(6), (ref.lon + x / (111320 * ref.cos)).toFixed(6));
+      next = route.cum[i] + step;
+    }
+  }
+  const list = smp.join(",");
+  const q = `[out:json][timeout:40];(` +
+    `way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|road|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"]["service"!~"parking_aisle|driveway"]["area"!="yes"](around:350,${list});` +
+    `way["waterway"~"^(river|canal)$"](around:600,${list});` +
+    `);out geom;`;
+  let js = null;
+  for (const url of OVERPASS) {
+    try {
+      const r = await fetch(url, { method: "POST", body: "data=" + encodeURIComponent(q),
+                                   headers: { "Content-Type": "application/x-www-form-urlencoded" } });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      js = await r.json(); break;
+    } catch (e) { log("Overpass lỗi (" + e.message + "), thử máy chủ khác"); }
+  }
+  if (!js) { log("Không tải được đường xung quanh, chỉ hiện tuyến"); return []; }
+  const out = [];
+  const MAJ = /^(motorway|trunk|primary|secondary)(_link)?$/;
+  for (const el of js.elements) {
+    if (el.type !== "way" || !el.geometry) continue;
+    const t = el.tags || {};
+    const cls = t.waterway ? 2 : (MAJ.test(t.highway || "") ? 1 : 0);
+    let pts = el.geometry.map(g => toXY(g.lat, g.lon));
+    pts = simplify(pts, 2.5);
+    if (pts.length < 2) continue;
+    let minx = 1e9, miny = 1e9, maxx = -1e9, maxy = -1e9;
+    for (const [x, y] of pts) { minx = Math.min(minx, x); maxx = Math.max(maxx, x); miny = Math.min(miny, y); maxy = Math.max(maxy, y); }
+    out.push({ cls, pts, minx, miny, maxx, maxy });
+  }
+  log("Tải được " + out.length + " đoạn đường xung quanh");
+  return out;
+}
+
+// ================== Gửi lên đồng hồ ==================
+function pk(type, extra, pts) {
+  const b = new DataView(new ArrayBuffer(extra.length + 1 + pts.length * 4));
+  b.setUint8(0, type);
+  extra.forEach((v, i) => b.setUint8(1 + i, v));
+  let o = 1 + extra.length;
+  for (const [x, y] of pts) {
+    b.setInt16(o, i16(x / ref.unit), true); b.setInt16(o + 2, i16(y / ref.unit), true); o += 4;
+  }
+  return new Uint8Array(b.buffer);
+}
+async function sendRoute(route) {
+  let tol = 2, pts = simplify(route.pts, tol);
+  while (pts.length > RT_MAXP) { tol *= 1.6; pts = simplify(route.pts, tol); }
+  const h = new DataView(new ArrayBuffer(10));
+  h.setUint8(0, 0x01);
+  h.setInt32(1, Math.round(ref.lat * 1e7), true);
+  h.setInt32(5, Math.round(ref.lon * 1e7), true);
+  h.setUint8(9, ref.unit);
+  bleSend(new Uint8Array(h.buffer));
+  for (let i = 0; i < pts.length; i += 43) {
+    const part = pts.slice(i, i + 43);
+    bleSend(pk(0x02, [part.length], part));
+  }
+  await bleSend(new Uint8Array([0x03]));
+  log("Đã gửi tuyến: " + pts.length + " điểm");
+}
+
+// Cắt các đường nằm trong ô vuông quanh xe rồi gửi
+let sendingWin = false;
+async function sendWindow() {
+  if (!rxChar || !nav.pos || sendingWin) return;
+  sendingWin = true;
+  const [cx, cy] = nav.pos;
+  const x0 = cx - WIN_HALF, x1 = cx + WIN_HALF, y0 = cy - WIN_HALF, y1 = cy + WIN_HALF;
+  const segIn = (a, b) => !(Math.max(a[0], b[0]) < x0 || Math.min(a[0], b[0]) > x1 ||
+                            Math.max(a[1], b[1]) < y0 || Math.min(a[1], b[1]) > y1);
+  const cand = feats.filter(f => !(f.maxx < x0 || f.minx > x1 || f.maxy < y0 || f.miny > y1));
+  // ưu tiên sông, đường lớn, rồi đường nhỏ gần xe
+  cand.forEach(f => {
+    const mx = (f.minx + f.maxx) / 2, my = (f.miny + f.maxy) / 2;
+    f._k = (f.cls === 0 ? 1e6 : 0) + Math.hypot(mx - cx, my - cy);
+  });
+  cand.sort((a, b) => a._k - b._k);
+  const runs = [];
+  let nP = 0;
+  for (const f of cand) {
+    let run = [];
+    for (let i = 1; i < f.pts.length; i++) {
+      if (segIn(f.pts[i - 1], f.pts[i])) {
+        if (!run.length) run.push(f.pts[i - 1]);
+        run.push(f.pts[i]);
+      } else if (run.length) { runs.push({ cls: f.cls, pts: run }); nP += run.length; run = []; }
+    }
+    if (run.length) { runs.push({ cls: f.cls, pts: run }); nP += run.length; }
+    if (nP > MAP_MAXP || runs.length > MAP_MAXL) break;
+  }
+  let usedP = 0, usedL = 0;
+  bleSend(new Uint8Array([0x11]));
+  for (const r of runs) {
+    if (usedL >= MAP_MAXL || usedP + r.pts.length > MAP_MAXP) break;
+    for (let i = 0; i < r.pts.length; i += 43) {
+      const part = r.pts.slice(i, i + 43);
+      bleSend(pk(0x12, [r.cls, i > 0 ? 1 : 0, part.length], part));
+    }
+    usedP += r.pts.length; usedL++;
+  }
+  await bleSend(new Uint8Array([0x13]));
+  nav.lastWinAt = Date.now(); nav.lastWinPos = [cx, cy];
+  $("navMapInfo").textContent = usedL + " đường";
+  sendingWin = false;
+}
+
+// ================== Dẫn đường ==================
+const nav = { active: false, sim: false, route: null, idx: 0, pos: null, off: 0, lastSendAt: 0,
+              lastWinAt: 0, lastWinPos: null, lastManKey: "", needRouteSend: false, rerouting: false,
+              simD: 0, simTimer: null, arrivedAt: 0 };
+
+async function startNav() {
+  if (!dest) return;
+  if (!me && !$("chkSim").checked) { alert("Chưa có vị trí GPS của điện thoại."); return; }
+  const from = me || { lat: map.getCenter().lat, lon: map.getCenter().lng };
+  $("btnGo").disabled = true; $("btnGo").textContent = "Đang tìm đường...";
+  try {
+    ref = makeRef(from.lat, from.lon);
+    const rt = await fetchRoute(from, dest);
+    nav.route = buildRoute(rt);
+    // tuyến quá dài so với số 16 bit: tăng "đơn vị" (mỗi số = vài mét)
+    let maxAbs = 0;
+    for (const [x, y] of nav.route.pts) maxAbs = Math.max(maxAbs, Math.abs(x), Math.abs(y));
+    ref.unit = Math.max(1, Math.ceil((maxAbs + 2000) / 30000));
+    drawRouteOnPhone();
+    $("btnGo").textContent = "Đang tải đường xung quanh...";
+    feats = await fetchFeatures(nav.route);
+    nav.active = true; nav.sim = $("chkSim").checked; nav.idx = 0; nav.off = 0; nav.simD = 0;
+    nav.lastWinAt = 0; nav.lastManKey = ""; nav.arrivedAt = 0;
+    $("planPanel").classList.add("hide"); $("navPanel").classList.remove("hide");
+    map.invalidateSize(); followMe = true;
+    try { if (navigator.wakeLock) await navigator.wakeLock.request("screen"); } catch (e) {}
+    if (rxChar) await sendRoute(nav.route); else nav.needRouteSend = true;
+    if (nav.sim) startSim(); else onMove();
+  } catch (e) {
+    alert("Lỗi: " + e.message);
+  } finally {
+    $("btnGo").disabled = false; $("btnGo").textContent = "Bắt đầu dẫn đường";
+  }
+}
+
+function drawRouteOnPhone() {
+  const ll = nav.route.pts.map(([x, y]) => [ref.lat + y / 110540, ref.lon + x / (111320 * ref.cos)]);
+  if (routeLine) routeLine.remove();
+  routeLine = L.polyline(ll, { color: "#4285f4", weight: 7, opacity: .9 }).addTo(map);
+  map.fitBounds(routeLine.getBounds(), { padding: [30, 30] });
+}
+
+function stopNav() {
+  nav.active = false;
+  if (nav.simTimer) { clearInterval(nav.simTimer); nav.simTimer = null; }
+  nav.sim = false;
+  bleText("X");
+  $("navPanel").classList.add("hide"); $("planPanel").classList.remove("hide");
+  map.invalidateSize();
+  log("Đã dừng dẫn đường");
+}
+
+// Xe giả chạy dọc tuyến để test ở nhà
+function startSim() {
+  nav.simTimer = setInterval(() => {
+    const R = nav.route;
+    nav.simD = Math.min(R.total, nav.simD + SIM_KMH / 3.6);
+    let i = 1;
+    while (i < R.pts.length - 1 && R.cum[i] < nav.simD) i++;
+    const a = R.pts[i - 1], b = R.pts[i], L0 = R.cum[i] - R.cum[i - 1] || 1;
+    const t = Math.max(0, Math.min(1, (nav.simD - R.cum[i - 1]) / L0));
+    const x = a[0] + (b[0] - a[0]) * t, y = a[1] + (b[1] - a[1]) * t;
+    me = { lat: ref.lat + y / 110540, lon: ref.lon + x / (111320 * ref.cos), acc: 5, spd: SIM_KMH,
+           hdg: (Math.atan2(b[0] - a[0], b[1] - a[1]) * 180 / Math.PI + 360) % 360, t: Date.now() };
+    onMove();
+  }, 1000);
+}
+
+// Tìm vị trí của xe trên tuyến (chiếu lên đoạn gần nhất)
+function project(R, x, y, startIdx) {
+  let best = { d: 1e18, i: startIdx, t: 0 };
+  const a0 = Math.max(1, startIdx - 15), a1 = Math.min(R.pts.length - 1, startIdx + 120);
+  const scan = (lo, hi) => {
+    for (let i = lo; i <= hi; i++) {
+      const [ax, ay] = R.pts[i - 1], [bx, by] = R.pts[i];
+      const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy || 1e-9;
+      let t = ((x - ax) * dx + (y - ay) * dy) / L2; t = Math.max(0, Math.min(1, t));
+      const d = Math.hypot(ax + t * dx - x, ay + t * dy - y);
+      if (d < best.d) best = { d, i, t };
+    }
+  };
+  scan(a0, a1);
+  if (best.d > 80) scan(1, R.pts.length - 1);   // lạc xa: tìm trên cả tuyến
+  best.along = R.cum[best.i - 1] + best.t * (R.cum[best.i] - R.cum[best.i - 1]);
+  return best;
+}
+
+async function reroute() {
+  if (nav.rerouting || !me) return;
+  nav.rerouting = true;
+  log("Đi lệch tuyến, đang tìm đường mới...");
+  try {
+    const rt = await fetchRoute(me, dest);
+    nav.route = buildRoute(rt);   // giữ nguyên gốc tọa độ để đường xung quanh vẫn dùng được
+    nav.idx = 0; nav.off = 0; nav.lastManKey = "";
+    drawRouteOnPhone();
+    if (rxChar) await sendRoute(nav.route);
+  } catch (e) { log("Tìm đường mới lỗi: " + e.message); }
+  nav.rerouting = false;
+}
+
+function onMove() {
+  showMe();
+  if (!nav.active || !me || !ref) return;
+  const R = nav.route;
+  const [x, y] = toXY(me.lat, me.lon);
+  nav.pos = [x, y];
+  const pr = project(R, x, y, nav.idx);
+  nav.idx = pr.i;
+  // đi lệch tuyến
+  if (!nav.sim && pr.d > Math.max(OFF_ROUTE_M, (me.acc || 20) * 1.5)) {
+    if (++nav.off >= 4) { nav.off = 0; reroute(); }
+  } else nav.off = 0;
+
+  const along = pr.along;
+  const remain = Math.max(0, R.total - along);
+  let st = R.steps.find(s => s.at > along + 3) || R.steps[R.steps.length - 1];
+  let dir = st ? st.dir : "S";
+  let dist = st ? st.at - along : remain;
+  let street = st ? st.name : "";
+  if (remain < 25) { dir = "A"; dist = remain; }
+  if (dir === "A") { street = dest.name; dist = remain; }
+  const etaMin = Math.max(1, Math.ceil(R.dur * (remain / Math.max(1, R.total)) / 60));
+
+  // điện thoại
+  $("navArrow").textContent = DIR_ICON[dir] || "↑";
+  $("navDist").textContent = fmtDist(dist);
+  $("navStreet").textContent = (DIR_TXT[dir] || "") + (street ? (dir === "A" ? ": " : " vào ") + street : "");
+  $("navRemain").textContent = fmtDist(remain);
+  $("navEta").textContent = etaMin + " phút";
+
+  if (!rxChar) return;
+  if (nav.needRouteSend) { nav.needRouteSend = false; sendRoute(R); nav.lastWinAt = 0; }
+
+  // vị trí điện thoại (đồng hồ dùng khi GPS của nó chưa bắt được; khi chạy thử thì ưu tiên)
+  const pos = new DataView(new ArrayBuffer(9));
+  pos.setUint8(0, 0x21);
+  pos.setInt16(1, i16(x / ref.unit), true); pos.setInt16(3, i16(y / ref.unit), true);
+  pos.setUint16(5, Math.round(((me.hdg || 0) + 360) % 360 * 100), true);
+  pos.setUint8(7, Math.min(255, Math.round(me.spd || 0)));
+  pos.setUint8(8, nav.sim ? 1 : 0);
+  if (bleQueued < 6) bleSend(new Uint8Array(pos.buffer));
+
+  // thông tin rẽ
+  const manKey = st ? st.x + "," + st.y : "";
+  if (manKey !== nav.lastManKey && st && dir !== "A") {
+    nav.lastManKey = manKey;
+    const mp = new DataView(new ArrayBuffer(5));
+    mp.setUint8(0, 0x22); mp.setInt16(1, i16(st.x / ref.unit), true); mp.setInt16(3, i16(st.y / ref.unit), true);
+    bleSend(new Uint8Array(mp.buffer));
+  }
+  if (bleQueued < 6) bleText(["M", dir, fmtDist(dist), etaMin, fmtDist(remain), street.replace(/[\r\n]/g, " ")].join(","));
+
+  // đường xung quanh: gửi lại khi đi xa hoặc sau một lúc
+  const moved = nav.lastWinPos ? Math.hypot(x - nav.lastWinPos[0], y - nav.lastWinPos[1]) : 1e9;
+  if (moved > WIN_MOVE_M || Date.now() - nav.lastWinAt > WIN_EVERY_MS * 3) sendWindow();
+
+  if (dir === "A" && remain < 25) {
+    if (!nav.arrivedAt) nav.arrivedAt = Date.now();
+    else if (Date.now() - nav.arrivedAt > 30000) stopNav();
+  }
+}
+
+// ================== Nút bấm ==================
+$("btnBle").onclick = bleConnect;
+$("btnSearch").onclick = search;
+$("q").addEventListener("keydown", e => { if (e.key === "Enter") search(); });
+$("btnGo").onclick = startNav;
+$("btnStop").onclick = stopNav;
+setBlePill();
+if (!navigator.bluetooth) log("Lưu ý: trình duyệt này không có Bluetooth web (trên iPhone hãy dùng app Bluefy).");
+</script>
+</body>
+</html>
